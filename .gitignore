@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Agent working files (architecture drafts, remarks)
+agent_work/
+.cursor/
+researches/*
