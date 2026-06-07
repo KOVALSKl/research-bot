@@ -1,7 +1,33 @@
 [project]
 name = "research-bot"
 version = "0.1.0"
-description = "Add your description here"
+description = "RAG assistant for scientific research papers"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "core-api",
+    "research-shared",
+]
+
+[tool.uv]
+package = false
+default-groups = ["dev"]
+
+[tool.uv.workspace]
+members = ["packages/*", "services/*"]
+
+[tool.uv.sources]
+core-api = { workspace = true }
+research-shared = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "httpx>=0.28",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["packages", "services"]
+pythonpath = ["packages/research_shared/src", "services/core_api/src"]

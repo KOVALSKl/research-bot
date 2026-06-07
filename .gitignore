@@ -221,3 +221,5 @@ __marimo__/
 agent_work/
 .cursor/
 researches/*
+
+.DS_Store
