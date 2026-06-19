@@ -13,6 +13,13 @@ from research_shared.storage.embeddings.factory import probe_dense_vector_size
 DENSE_VECTOR_NAME = "dense"
 SPARSE_VECTOR_NAME = "sparse"
 
+_PAYLOAD_INDEXES: tuple[tuple[str, PayloadSchemaType], ...] = (
+    ("research_id", PayloadSchemaType.KEYWORD),
+    ("source_path", PayloadSchemaType.KEYWORD),
+    ("authors", PayloadSchemaType.KEYWORD),
+    ("page", PayloadSchemaType.INTEGER),
+)
+
 
 async def ensure_collection(
     client: AsyncQdrantClient,
@@ -34,6 +41,7 @@ async def ensure_collection(
                 )
             await client.delete_collection(collection_name)
         else:
+            await _ensure_payload_indexes(client, collection_name)
             return
 
     await client.create_collection(
@@ -46,11 +54,22 @@ async def ensure_collection(
         },
     )
 
-    await client.create_payload_index(
-        collection_name=collection_name,
-        field_name="research_id",
-        field_schema=PayloadSchemaType.KEYWORD,
-    )
+    await _ensure_payload_indexes(client, collection_name)
+
+
+async def _ensure_payload_indexes(client: AsyncQdrantClient, collection_name: str) -> None:
+    for field_name, field_schema in _PAYLOAD_INDEXES:
+        try:
+            await client.create_payload_index(
+                collection_name=collection_name,
+                field_name=field_name,
+                field_schema=field_schema,
+            )
+        except Exception as exc:
+            message = str(exc).lower()
+            if "already exists" in message or "already exist" in message:
+                continue
+            raise
 
 
 async def _get_dense_vector_size(client: AsyncQdrantClient, collection_name: str) -> int | None:

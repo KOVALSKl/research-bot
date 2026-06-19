@@ -6,14 +6,14 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 COPY pyproject.toml uv.lock ./
 COPY packages/research_shared/pyproject.toml packages/research_shared/
-COPY services/core_api/pyproject.toml services/core_api/
 COPY services/worker/pyproject.toml services/worker/
+COPY services/core_api/pyproject.toml services/core_api/
 COPY services/vk_bot/pyproject.toml services/vk_bot/
 
 COPY packages/research_shared packages/research_shared
-COPY services/core_api services/core_api
+COPY services/worker services/worker
 
-RUN uv sync --package core-api --no-dev
+RUN uv sync --package worker --no-dev
 
 FROM python:3.12-slim
 
@@ -23,6 +23,4 @@ COPY --from=builder /app /app
 
 ENV PATH="/app/.venv/bin:$PATH"
 
-EXPOSE 8000
-
-CMD ["core-api"]
+CMD ["celery", "-A", "worker.celery_app", "worker", "--loglevel=info"]

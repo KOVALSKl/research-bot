@@ -1,5 +1,5 @@
 from research_shared.config.settings import Settings
-from research_shared.domain.models import ResearchChunk, SearchQuery, SearchResult, SearchType
+from research_shared.domain.models import AskQuery, ResearchChunk, SearchQuery, SearchResult, SearchType
 
 
 def test_settings_defaults() -> None:
@@ -9,6 +9,15 @@ def test_settings_defaults() -> None:
     assert settings.qdrant_collection_name == "research_chunks"
     assert settings.qdrant_url == "http://localhost:6333"
     assert settings.dense_embedding_provider == "ollama"
+    assert settings.ask_default_limit == 10
+    assert settings.rag_system_prompt == ""
+
+
+def test_ask_query_limit_optional() -> None:
+    query = AskQuery(question="What is X?")
+    assert query.limit is None
+    explicit = AskQuery(question="What is X?", limit=7)
+    assert explicit.limit == 7
 
 
 def test_research_chunk_defaults() -> None:

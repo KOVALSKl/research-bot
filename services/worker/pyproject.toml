@@ -1,14 +1,11 @@
 [project]
-name = "core-api"
+name = "worker"
 version = "0.1.0"
-description = "Core API service: hybrid search and RAG backend"
+description = "Celery worker: background PDF ingestion and indexing"
 requires-python = ">=3.12"
 dependencies = [
     "research-shared",
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.34",
     "celery[redis]>=5.4",
-    "python-multipart>=0.0.20",
 ]
 
 [build-system]
@@ -19,7 +16,4 @@ build-backend = "hatchling.build"
 research-shared = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/core_api"]
-
-[project.scripts]
-core-api = "core_api.main:run"
+packages = ["src/worker"]

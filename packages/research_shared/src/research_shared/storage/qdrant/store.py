@@ -7,6 +7,28 @@ from research_shared.storage.protocols import DenseEmbedder, SparseEncoder
 from research_shared.storage.qdrant.collection import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 
 
+def _chunk_payload(chunk: ResearchChunk) -> dict:
+    page = chunk.metadata.get("page")
+    chapter = chunk.chapter or chunk.metadata.get("chapter")
+    metadata = {
+        key: value
+        for key, value in chunk.metadata.items()
+        if key not in ("page", "chapter")
+    }
+
+    return {
+        "research_id": chunk.research_id,
+        "research_title": chunk.title,
+        "text": chunk.text,
+        "source_path": chunk.source_path or "",
+        "display_name": chunk.display_name or "",
+        "authors": chunk.authors or [],
+        "page": page,
+        "chapter": chapter,
+        "metadata": metadata,
+    }
+
+
 class QdrantVectorStore:
     """Upsert and delete research chunks in Qdrant."""
 
@@ -43,12 +65,7 @@ class QdrantVectorStore:
                         DENSE_VECTOR_NAME: dense,
                         SPARSE_VECTOR_NAME: SparseVector(indices=indices, values=values),
                     },
-                    payload={
-                        "research_id": chunk.research_id,
-                        "title": chunk.title,
-                        "text": chunk.text,
-                        "metadata": chunk.metadata,
-                    },
+                    payload=_chunk_payload(chunk),
                 )
             )
 
