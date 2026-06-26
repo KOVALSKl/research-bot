@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <title>ArXiv Query Results</title>
+  <entry>
+    <id>http://arxiv.org/abs/2301.00001</id>
+    <title>Deep Learning for SME Credit Risk</title>
+    <published>2023-01-15T12:00:00Z</published>
+    <summary>We propose a deep learning model for credit risk in small businesses.</summary>
+    <author>
+      <name>Dan Brown</name>
+    </author>
+    <author>
+      <name>Eve White</name>
+    </author>
+    <link rel="alternate" href="http://arxiv.org/abs/2301.00001"/>
+    <arxiv:doi>10.1234/arxiv.sme.2023</arxiv:doi>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2010.00002</id>
+    <title>Old Paper Without Abstract</title>
+    <published>2020-10-01T08:00:00Z</published>
+    <author>
+      <name>Frank Green</name>
+    </author>
+    <link rel="alternate" href="http://arxiv.org/abs/2010.00002"/>
+  </entry>
+</feed>

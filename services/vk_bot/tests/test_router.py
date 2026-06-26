@@ -59,3 +59,19 @@ def test_unknown_text(router: CommandRouter):
 def test_ask_without_payload_is_unknown(router: CommandRouter):
   result = router.resolve(_msg(text="/ask"))
   assert result.intent == Intent.UNKNOWN
+
+
+def test_idea_without_payload_returns_help(router: CommandRouter):
+  result = router.resolve(_msg(text="/idea"))
+  assert result.intent == Intent.HELP
+
+
+def test_idea_prefixes(router: CommandRouter):
+  cases = [
+    ("/idea Use GNN for fraud detection", "Use GNN for fraud detection"),
+    ("/идея: применить трансформеры к ценам", "применить трансформеры к ценам"),
+  ]
+  for text, expected in cases:
+    result = router.resolve(_msg(text=text))
+    assert result.intent == Intent.IDEA
+    assert result.idea_text == expected

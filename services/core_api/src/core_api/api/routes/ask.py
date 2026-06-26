@@ -1,3 +1,5 @@
+"""Legacy RAG endpoint. Prefer ``POST /agent/ask`` for the Research Agent pipeline."""
+
 from fastapi import APIRouter, Depends
 
 from research_shared.domain.models import AskQuery, AskResponse

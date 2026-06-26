@@ -13,7 +13,12 @@ from research_shared.domain.models import (
     SourceFileRef,
 )
 from research_shared.logging_config import get_logger
-from research_shared.rag.citations import citation_display_name, citation_filename, dedupe_citations
+from research_shared.rag.citations import (
+    build_source_files,
+    citation_display_name,
+    citation_filename,
+    dedupe_citations,
+)
 from research_shared.storage.protocols import HybridSearcher
 
 if TYPE_CHECKING:
@@ -58,11 +63,12 @@ class RagService:
                 display_name=result.chunk.display_name,
                 chapter=result.chunk.chapter,
                 authors=result.chunk.authors,
+                source_url=result.chunk.metadata.get("source_url"),
             )
             for result in results
         ]
         citations = dedupe_citations(raw_citations)
-        source_files = self._build_source_files(citations)
+        source_files = build_source_files(citations)
 
         answer: str | None = None
         if self._llm is not None:
@@ -81,21 +87,7 @@ class RagService:
 
     @staticmethod
     def _build_source_files(citations: list[Citation]) -> list[SourceFileRef]:
-        seen: set[str] = set()
-        refs: list[SourceFileRef] = []
-        for citation in citations:
-            if citation.research_id in seen:
-                continue
-            seen.add(citation.research_id)
-            refs.append(
-                SourceFileRef(
-                    research_id=citation.research_id,
-                    filename=citation_filename(citation),
-                    display_name=citation.display_name or citation_display_name(citation),
-                    path=citation.source_path,
-                )
-            )
-        return refs
+        return build_source_files(citations)
 
     @staticmethod
     def _build_context(

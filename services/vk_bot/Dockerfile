@@ -1,5 +1,7 @@
 FROM python:3.12-slim AS builder
 
+ARG GIT_SHA=unknown
+
 WORKDIR /app
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
@@ -16,6 +18,9 @@ COPY services/vk_bot services/vk_bot
 RUN uv sync --package vk-bot --no-dev
 
 FROM python:3.12-slim
+
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
 
 WORKDIR /app
 

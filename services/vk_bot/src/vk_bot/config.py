@@ -1,14 +1,29 @@
+import json
 import tempfile
 from pathlib import Path
+from typing import Annotated
 
-from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import AliasChoices, Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 def _parse_csv_list(value: object) -> object:
   if isinstance(value, str):
-    return [item.strip() for item in value.split(",") if item.strip()]
+    stripped = value.strip()
+    if not stripped:
+      return []
+    if stripped.startswith("["):
+      try:
+        parsed = json.loads(stripped)
+      except json.JSONDecodeError:
+        parsed = None
+      if isinstance(parsed, list):
+        return [str(item).strip() for item in parsed if str(item).strip()]
+    return [item.strip() for item in stripped.split(",") if item.strip()]
   return value
+
+
+CsvList = Annotated[list[str], NoDecode]
 
 
 class VkBotSettings(BaseSettings):
@@ -48,6 +63,28 @@ class VkBotSettings(BaseSettings):
   vk_batch_poll_interval_seconds: int = Field(default=15, alias="VK_BATCH_POLL_INTERVAL_SECONDS")
 
   vk_core_api_timeout_seconds: float = Field(default=30.0, alias="VK_CORE_API_TIMEOUT_SECONDS")
+  vk_core_api_startup_wait_seconds: float = Field(
+    default=120.0,
+    alias="VK_CORE_API_STARTUP_WAIT_SECONDS",
+  )
+  vk_core_api_startup_poll_interval_seconds: float = Field(
+    default=2.0,
+    alias="VK_CORE_API_STARTUP_POLL_INTERVAL_SECONDS",
+  )
+  vk_core_api_retry_max: int = Field(
+    default=3,
+    validation_alias=AliasChoices(
+      "VK_CORE_API_RETRY_MAX",
+      "VK_CORE_API_RETRY_MAX_ATTEMPTS",
+    ),
+  )
+  vk_core_api_retry_backoff_seconds: float = Field(
+    default=1.0,
+    validation_alias=AliasChoices(
+      "VK_CORE_API_RETRY_BACKOFF_SECONDS",
+      "VK_CORE_API_RETRY_BASE_DELAY_SECONDS",
+    ),
+  )
   vk_ask_timeout_seconds: float = Field(default=180.0, alias="VK_ASK_TIMEOUT_SECONDS")
   vk_attachment_max_bytes: int = Field(default=52_428_800, alias="VK_ATTACHMENT_MAX_BYTES")
 
@@ -65,23 +102,43 @@ class VkBotSettings(BaseSettings):
     default_factory=lambda: str(Path(tempfile.gettempdir()) / "vk_bot_uploads"),
     alias="VK_NAMING_TEMP_DIR",
   )
-  vk_list_command_prefixes: list[str] = Field(
+  vk_list_command_prefixes: CsvList = Field(
     default_factory=lambda: ["/list", "/исследования", "/research"],
     alias="VK_LIST_COMMAND_PREFIXES",
   )
   log_level: str = Field(default="INFO", alias="LOG_LEVEL")
   log_format: str = Field(default="text", alias="LOG_FORMAT")
 
-  vk_ask_command_prefixes: list[str] = Field(
+  vk_conversation_history_enabled: bool = Field(
+    default=True, alias="VK_CONVERSATION_HISTORY_ENABLED"
+  )
+  vk_conversation_history_max_turns: int = Field(
+    default=5, alias="VK_CONVERSATION_HISTORY_MAX_TURNS"
+  )
+  vk_conversation_history_ttl_seconds: int = Field(
+    default=3600, alias="VK_CONVERSATION_HISTORY_TTL_SECONDS"
+  )
+
+  vk_ask_command_prefixes: CsvList = Field(
     default_factory=lambda: ["/ask", "/вопрос", "?", "вопрос:"],
     alias="VK_ASK_COMMAND_PREFIXES",
   )
-  vk_greeting_keywords: list[str] = Field(
+  vk_idea_command_prefixes: CsvList = Field(
+    default_factory=lambda: ["/idea", "/идея"],
+    alias="VK_IDEA_COMMAND_PREFIXES",
+  )
+  vk_greeting_keywords: CsvList = Field(
     default_factory=lambda: ["привет", "старт", "/start", "начать", "hello", "hi"],
     alias="VK_GREETING_KEYWORDS",
   )
 
-  @field_validator("vk_ask_command_prefixes", "vk_greeting_keywords", "vk_list_command_prefixes", mode="before")
+  @field_validator(
+    "vk_ask_command_prefixes",
+    "vk_greeting_keywords",
+    "vk_list_command_prefixes",
+    "vk_idea_command_prefixes",
+    mode="before",
+  )
   @classmethod
   def _parse_list_fields(cls, value: object) -> object:
     return _parse_csv_list(value)

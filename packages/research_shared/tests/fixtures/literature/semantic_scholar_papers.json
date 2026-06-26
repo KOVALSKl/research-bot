@@ -1,0 +1,28 @@
+{
+  "total": 2,
+  "data": [
+    {
+      "paperId": "abc123def456",
+      "title": "Graph Neural Networks for Financial Distress",
+      "year": 2023,
+      "abstract": "Semantic Scholar abstract about GNN bankruptcy prediction.",
+      "url": "https://www.semanticscholar.org/paper/abc123def456",
+      "authors": [
+        {"name": "Alice Smith"},
+        {"name": "Bob Jones"}
+      ],
+      "externalIds": {
+        "DOI": "10.1234/gnn.fin.2023"
+      }
+    },
+    {
+      "paperId": "xyz789",
+      "title": "Unrelated Topic Paper",
+      "year": 2019,
+      "abstract": "Different research area.",
+      "url": "https://www.semanticscholar.org/paper/xyz789",
+      "authors": [{"name": "Grace Hopper"}],
+      "externalIds": {}
+    }
+  ]
+}

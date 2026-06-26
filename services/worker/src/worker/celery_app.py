@@ -21,4 +21,8 @@ app.conf.beat_schedule = {
         "task": "worker.beat.scan_researches",
         "schedule": settings.researches_scan_interval_seconds,
     },
+    "cleanup-staging": {
+        "task": "worker.beat.cleanup_staging",
+        "schedule": 3600.0,
+    },
 }

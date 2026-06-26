@@ -2,7 +2,7 @@ import asyncio
 
 from research_shared.config.settings import Settings, get_settings
 from research_shared.domain.models import IngestStatus
-from research_shared.ingestion.file_storage import FileStorage
+from research_shared.ingestion.factory import create_archive_storage, create_staging_storage
 from research_shared.ingestion.state_store import QdrantIngestionStateStore
 from research_shared.storage.qdrant.client_factory import create_qdrant_client
 
@@ -12,11 +12,11 @@ from worker.tasks import index_document
 
 @app.task(name="worker.beat.scan_researches")
 def scan_researches() -> dict:
-    """Periodically enqueue indexing for new/changed files in ``researches/``.
+    """Periodically enqueue indexing for new/changed files in remote/local storage.
 
-    Thin layer over ``ingestion_state``: lists ``*.pdf``, compares content
-    hashes, enqueues ``index_document`` only for new or modified files. Whole
-    task is a no-op unless ``researches_scan_enabled`` is true.
+    Thin layer over ``ingestion_state``: lists PDFs, compares content hashes,
+    enqueues ``index_document`` only for new or modified files. Whole task is a
+    no-op unless ``researches_scan_enabled`` is true.
     """
     settings = get_settings()
     if not settings.researches_scan_enabled:
@@ -25,16 +25,19 @@ def scan_researches() -> dict:
 
 
 async def _scan(settings: Settings) -> dict:
-    file_storage = FileStorage(settings)
+    archive_storage = create_archive_storage(settings)
     client = create_qdrant_client(settings)
     enqueued: list[str] = []
-    paths = file_storage.list()
+    pdf_files = archive_storage.list_pdfs()
     try:
         state_store = QdrantIngestionStateStore(client, settings)
         await state_store.ensure_collection()
 
-        for path in paths:
-            stored = file_storage.describe(path)
+        for info in pdf_files:
+            try:
+                stored = archive_storage.describe(info.filename)
+            except FileNotFoundError:
+                continue
             record = await state_store.get(stored.filename)
             is_indexed = (
                 record is not None
@@ -43,9 +46,18 @@ async def _scan(settings: Settings) -> dict:
             )
             if is_indexed:
                 continue
-            index_document.delay(str(path))
+            index_document.delay(stored.filename)
             enqueued.append(stored.filename)
     finally:
         await client.close()
 
-    return {"enabled": True, "scanned": len(paths), "enqueued": len(enqueued), "files": enqueued}
+    return {"enabled": True, "scanned": len(pdf_files), "enqueued": len(enqueued), "files": enqueued}
+
+
+@app.task(name="worker.beat.cleanup_staging")
+def cleanup_staging() -> dict:
+    """Remove orphan staging files older than the configured TTL."""
+    settings = get_settings()
+    staging = create_staging_storage(settings)
+    result = staging.cleanup_older_than(settings.ingest_staging_ttl_hours)
+    return {"ttl_hours": settings.ingest_staging_ttl_hours, **result}

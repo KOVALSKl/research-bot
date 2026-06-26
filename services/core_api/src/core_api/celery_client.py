@@ -4,6 +4,7 @@ from celery.result import AsyncResult
 from research_shared.config.settings import Settings
 
 INDEX_DOCUMENT_TASK = "worker.tasks.index_document"
+ARCHIVE_DOCUMENT_TASK = "worker.tasks.archive_document"
 
 _STATE_MAP = {
     "PENDING": "queued",
@@ -41,6 +42,18 @@ class CeleryClient:
         if display_name is not None:
             kwargs["display_name"] = display_name
         result = self._app.send_task(INDEX_DOCUMENT_TASK, args=[path], kwargs=kwargs)
+        return result.id
+
+    def enqueue_archive_document(
+        self,
+        path: str,
+        *,
+        display_name: str | None = None,
+    ) -> str:
+        kwargs: dict = {}
+        if display_name is not None:
+            kwargs["display_name"] = display_name
+        result = self._app.send_task(ARCHIVE_DOCUMENT_TASK, args=[path], kwargs=kwargs)
         return result.id
 
     def get_status(self, task_id: str) -> dict:

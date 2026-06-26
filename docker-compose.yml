@@ -6,11 +6,17 @@ services:
       - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
-    # healthcheck:
-    #   test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/6333 && echo -e 'GET /readyz HTTP/1.1\r\nHost: localhost\r\n\r\n' >&3 && cat <&3 | grep -q '200'"]
-    #   interval: 5s
-    #   timeout: 3s
-    #   retries: 10
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333 &&
+          printf "GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3 &&
+          head -1 <&3 | grep -q "200"'
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   redis:
     image: redis:7-alpine
@@ -18,30 +24,44 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
   core_api:
     build:
       context: .
       dockerfile: services/core_api/Dockerfile
     ports:
-      - "8880:8000"
+      - "8800:8000"
     env_file:
       - .env
     environment:
       QDRANT_HOST: qdrant
       QDRANT_PORT: 6333
       REDIS_URL: redis://redis:6379/0
+      STORAGE_BACKEND: yandex
+      INGEST_STAGING_DIR: /app/staging
+      EXTERNAL_PDF_CACHE_DIR: /app/external_pdfs
+      FASTEMBED_CACHE_PATH: /app/.cache/fastembed
     volumes:
-      - ./researches:/app/researches
+      - ingest_staging:/app/staging
     depends_on:
-      - qdrant
-      - redis
-      # qdrant:
-      #   condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    profiles:
-      - full
 
   worker:
     build:
@@ -54,33 +74,42 @@ services:
       QDRANT_PORT: 6333
       REDIS_URL: redis://redis:6379/0
       OLLAMA_HOST: host.docker.internal
+      STORAGE_BACKEND: yandex
+      INGEST_STAGING_DIR: /app/staging
+      FASTEMBED_CACHE_PATH: /app/.cache/fastembed
     volumes:
-      - ./researches:/app/researches
+      - ingest_staging:/app/staging
     depends_on:
-      - qdrant
-      - redis
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    profiles:
-      - full
 
   vk_bot:
     build:
       context: .
       dockerfile: services/vk_bot/Dockerfile
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     env_file:
       - .env
     environment:
       CORE_API_BASE_URL: http://core_api:8000
       REDIS_URL: redis://redis:6379/0
+      GIT_SHA: ${GIT_SHA:-unknown}
+      STORAGE_BACKEND: yandex
     ports:
       - "8081:8081"
     depends_on:
-      - core_api
-      - redis
-    profiles:
-      - full
+      core_api:
+        condition: service_healthy
+      redis:
+        condition: service_started
 
 volumes:
   qdrant_data:
   redis_data:
+  external_pdfs:
+  ingest_staging:

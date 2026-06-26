@@ -8,7 +8,10 @@ def test_settings_defaults() -> None:
     assert settings.qdrant_port == 6333
     assert settings.qdrant_collection_name == "research_chunks"
     assert settings.qdrant_url == "http://localhost:6333"
-    assert settings.dense_embedding_provider == "ollama"
+    assert settings.dense_embedding_provider == "fastembed"
+    assert settings.dense_embedding_model == "intfloat/multilingual-e5-large"
+    assert settings.chunk_size == 900
+    assert settings.chunk_min_chars == 80
     assert settings.ask_default_limit == 10
     assert settings.rag_system_prompt == ""
 

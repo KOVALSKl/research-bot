@@ -74,6 +74,65 @@ def _event_to_message(event: object) -> tuple[IncomingMessage | None, object]:
   )
 
 
+def _parse_longpoll_updates(longpoll: VkLongPoll, raw_events: list) -> list:
+  events: list = []
+  for raw_event in raw_events:
+    try:
+      events.append(longpoll._parse_event(raw_event))
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+      logger.warning("Skipping malformed VK long poll event: %s", exc)
+  return events
+
+
+class SafeVkLongPoll(VkLongPoll):
+  """VkLongPoll that skips malformed updates instead of crashing the bot."""
+
+  def check(self):
+    values = {
+      "act": "a_check",
+      "key": self.key,
+      "ts": self.ts,
+      "wait": self.wait,
+      "mode": self.mode,
+      "version": 3,
+    }
+
+    response = self.session.get(
+      self.url,
+      params=values,
+      timeout=self.wait + 10,
+    ).json()
+
+    if "failed" not in response:
+      self.ts = response["ts"]
+      self.pts = response.get("pts")
+
+      events = _parse_longpoll_updates(longpoll=self, raw_events=response["updates"])
+
+      if self.preload_messages:
+        message_events = [
+          event
+          for event in events
+          if getattr(event, "type", None) == VkEventType.MESSAGE_NEW
+        ]
+        if message_events:
+          try:
+            self.preload_message_events_data(message_events)
+          except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            logger.warning("Skipping VK message preload: %s", exc)
+
+      return events
+
+    if response["failed"] == 1:
+      self.ts = response["ts"]
+    elif response["failed"] == 2:
+      self.update_longpoll_server(update_ts=False)
+    elif response["failed"] == 3:
+      self.update_longpoll_server()
+
+    return []
+
+
 class VkLongPollingTransport:
   def __init__(
     self,
@@ -132,11 +191,13 @@ class VkLongPollingTransport:
       token=self._settings.vk_bot_token,
       api_version=self._settings.vk_api_version,
     )
-    longpoll = VkLongPoll(
+    longpoll = SafeVkLongPoll(
       session,
       group_id=self._settings.vk_group_id,
       preload_messages=True,
     )
+
+    handler_timeout = self._settings.vk_ask_timeout_seconds + 60.0
 
     for event in longpoll.listen():
       if self._thread_stop.is_set():
@@ -151,7 +212,7 @@ class VkLongPollingTransport:
         self._loop,
       )
       try:
-        future.result(timeout=300)
+        future.result(timeout=handler_timeout)
       except Exception:
         logger.exception("Handler failed for long poll message")
 

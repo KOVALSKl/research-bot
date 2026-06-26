@@ -5,6 +5,7 @@ from research_shared.llm.huggingface import HuggingFaceInferenceProvider
 from research_shared.llm.ollama import OllamaLLMProvider
 from research_shared.llm.prompts import get_rag_system_prompt
 from research_shared.llm.protocols import LLMProvider
+from research_shared.llm.yandex_ai_studio import YandexAIStudioProvider
 
 
 def _load_custom_provider(module_path: str, settings: Settings) -> LLMProvider:
@@ -72,5 +73,25 @@ def create_llm_provider(settings: Settings | None = None) -> LLMProvider | None:
 
     if provider == "custom":
         return _load_custom_provider(settings.llm_provider_module, settings)
+
+    if provider == "yandex_ai_studio":
+        if not settings.yandex_ai_studio_api_key:
+            raise ValueError(
+                "YANDEX_AI_STUDIO_API_KEY is required when llm_provider=yandex_ai_studio"
+            )
+        if not settings.yandex_ai_studio_folder_id:
+            raise ValueError(
+                "YANDEX_AI_STUDIO_FOLDER_ID is required when llm_provider=yandex_ai_studio"
+            )
+        return YandexAIStudioProvider(
+            model=settings.yandex_ai_studio_model,
+            api_key=settings.yandex_ai_studio_api_key,
+            folder_id=settings.yandex_ai_studio_folder_id,
+            base_url=settings.yandex_ai_studio_base_url,
+            system_prompt=system_prompt,
+            temperature=settings.yandex_ai_studio_temperature,
+            max_output_tokens=settings.yandex_ai_studio_max_output_tokens,
+            timeout_seconds=settings.yandex_ai_studio_timeout_seconds,
+        )
 
     raise ValueError(f"Unknown llm_provider: {provider!r}")

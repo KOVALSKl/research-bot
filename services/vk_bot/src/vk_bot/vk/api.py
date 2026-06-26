@@ -8,6 +8,7 @@ from urllib.parse import urljoin
 import httpx
 import vk_api
 
+from research_shared.http.redirects import fetch_with_redirects
 from research_shared.logging_config import get_logger
 from vk_bot.config import VkBotSettings
 from vk_bot.domain import Attachment
@@ -26,6 +27,14 @@ class VkApiClientProtocol(Protocol):
     text: str,
     *,
     attachment: str | None = None,
+  ) -> int: ...
+
+  async def delete_message(
+    self,
+    peer_id: int,
+    message_id: int,
+    *,
+    delete_for_all: bool = True,
   ) -> None: ...
 
   async def download_attachments(
@@ -63,6 +72,7 @@ class VkApiClient:
       self._api.docs.getUploadServer,
       self._api.docs.save,
     )
+    self._message_id_counter = 0
 
   async def send_message(
     self,
@@ -70,7 +80,7 @@ class VkApiClient:
     text: str,
     *,
     attachment: str | None = None,
-  ) -> None:
+  ) -> int:
     kwargs: dict[str, Any] = {
       "peer_id": peer_id,
       "message": text,
@@ -78,7 +88,34 @@ class VkApiClient:
     }
     if attachment:
       kwargs["attachment"] = attachment
-    await asyncio.to_thread(self._api.messages.send, **kwargs)
+    message_id = await asyncio.to_thread(self._api.messages.send, **kwargs)
+    if isinstance(message_id, int):
+      return message_id
+    self._message_id_counter += 1
+    return self._message_id_counter
+
+  async def delete_message(
+    self,
+    peer_id: int,
+    message_id: int,
+    *,
+    delete_for_all: bool = True,
+  ) -> None:
+    try:
+      await asyncio.to_thread(
+        self._api.messages.delete,
+        message_ids=message_id,
+        delete_for_all=1 if delete_for_all else 0,
+      )
+    except Exception:
+      logger.exception(
+        "Failed to delete VK message",
+        extra={
+          "event": "vk.messages.delete_failed",
+          "peer_id": peer_id,
+          "message_id": message_id,
+        },
+      )
 
   async def get_messages_by_id(self, message_ids: list[int]) -> list[dict[str, Any]]:
     if not message_ids:
@@ -185,32 +222,13 @@ class VkApiClient:
     client: httpx.AsyncClient,
     url: str,
   ) -> tuple[httpx.Response, int]:
-    max_redirects = self._settings.vk_http_max_redirects
-    headers = {"User-Agent": _VK_USER_AGENT}
-    redirect_count = 0
-    current_url = url
-
-    while True:
-      response = await client.get(
-        current_url,
-        follow_redirects=False,
-        headers=headers,
-      )
-      if response.status_code not in _REDIRECT_STATUSES:
-        return response, redirect_count
-
-      if redirect_count >= max_redirects:
-        raise httpx.TooManyRedirects(
-          f"Exceeded max redirects ({max_redirects}) for {url}",
-          request=response.request,
-        )
-
-      location = response.headers.get("Location")
-      if not location:
-        return response, redirect_count
-
-      redirect_count += 1
-      current_url = urljoin(str(response.url), location)
+    response = await fetch_with_redirects(
+      client,
+      url,
+      max_redirects=self._settings.vk_http_max_redirects,
+      headers={"User-Agent": _VK_USER_AGENT},
+    )
+    return response, 0
 
   async def _download_url(
     self,

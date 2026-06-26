@@ -6,7 +6,8 @@ import pytest
 from research_shared.config.settings import Settings
 from research_shared.domain.models import DocumentRecord, IngestStatus, ResearchChunk
 from research_shared.ingestion.chunker import RecursiveChunker
-from research_shared.ingestion.file_storage import StoredFile
+from research_shared.ingestion.file_storage import StoredFile, compute_content_hash
+from research_shared.ingestion.staging_storage import StagedFile
 from research_shared.ingestion.pdf_parser import PyMuPDFParser
 from research_shared.ingestion.pipeline import IngestionPipeline
 from research_shared.ingestion.protocols import ParsedDocument, ParsedPage
@@ -43,7 +44,7 @@ def test_pdf_parser_pages_and_title(tmp_path) -> None:
 
 
 def test_chunker_page_and_chunk_index_and_overlap() -> None:
-    settings = Settings(_env_file=None, chunk_size=60, chunk_overlap=20)
+    settings = Settings(_env_file=None, chunk_size=60, chunk_overlap=20, chunk_min_chars=0)
     chunker = RecursiveChunker(settings)
 
     long_text = " ".join(f"word{i}" for i in range(40))
@@ -71,15 +72,91 @@ def test_chunker_page_and_chunk_index_and_overlap() -> None:
         assert first_tokens & second_tokens
 
 
+def test_chunker_normalizes_pdf_line_breaks_and_hyphenation() -> None:
+    settings = Settings(_env_file=None, chunk_size=200, chunk_overlap=40, chunk_min_chars=20)
+    chunker = RecursiveChunker(settings)
+    raw = (
+        "Исследование финан-\n"
+        "совых пирамид показывает\n"
+        "устойчивые закономерности.\n\n"
+        "Вторая часть текста на новой строке."
+    )
+    document = ParsedDocument(title="Doc", pages=[ParsedPage(page=1, text=raw)])
+    chunks = chunker.chunk(document, research_id="r1")
+
+    assert chunks
+    assert "финансовых" in chunks[0].text
+    assert "финан-\n" not in chunks[0].text
+    assert all(len(chunk.text) <= settings.chunk_size for chunk in chunks)
+
+
+def test_chunker_skips_tiny_fragments() -> None:
+    settings = Settings(_env_file=None, chunk_size=500, chunk_overlap=50, chunk_min_chars=80)
+    chunker = RecursiveChunker(settings)
+    document = ParsedDocument(
+        title="Doc",
+        pages=[ParsedPage(page=1, text="Короткий.")],
+    )
+    assert chunker.chunk(document, research_id="r1") == []
+
+
 # --- IngestionPipeline -----------------------------------------------------
 
 
-class _FakeFileStorage:
-    def __init__(self, stored: StoredFile) -> None:
-        self._stored = stored
+class _FakeStagingStorage:
+    def __init__(self, content: bytes, filename: str = "a.pdf") -> None:
+        self._content = content
+        self._filename = filename
+        self.deleted: list[str] = []
 
-    def describe(self, path) -> StoredFile:
-        return self._stored
+    def save(self, filename: str, content: bytes) -> StagedFile:
+        from pathlib import Path
+
+        return StagedFile(
+            key=Path(filename).name,
+            filename=Path(filename).name,
+            content_hash="h1",
+            research_id="r1",
+            path=Path("/tmp/staged.pdf"),
+        )
+
+    def read(self, key: str) -> bytes:
+        return self._content
+
+    def delete(self, key: str) -> None:
+        self.deleted.append(key)
+
+    def exists(self, key: str) -> bool:
+        return True
+
+
+class _FakeArchiveStorage:
+    def __init__(self) -> None:
+        self.saved: list[tuple[str, bytes]] = []
+        self.should_fail = False
+
+    def save(self, filename: str, content: bytes) -> StoredFile:
+        if self.should_fail:
+            raise RuntimeError("archive failed")
+        self.saved.append((filename, content))
+        return StoredFile(
+            path=None,
+            filename=filename,
+            content_hash="h1",
+            research_id="r1",
+        )
+
+    def describe(self, filename: str) -> StoredFile:
+        return StoredFile(path=None, filename=filename, content_hash="h1", research_id="r1")
+
+    def list_pdfs(self):
+        return []
+
+    def read(self, filename: str) -> bytes:
+        return b"%PDF-1.4"
+
+    def delete(self, filename: str) -> None:
+        return None
 
 
 class _FakeParser:
@@ -132,41 +209,45 @@ class _FakeStateStore:
         return list(self.records.values())
 
 
-def _pipeline(vector_store, state_store, stored, n_chunks=3) -> IngestionPipeline:
-    return IngestionPipeline(
+def _pipeline(vector_store, state_store, content=b"%PDF-1.4", n_chunks=3) -> tuple[IngestionPipeline, _FakeStagingStorage, _FakeArchiveStorage]:
+    staging = _FakeStagingStorage(content)
+    archive = _FakeArchiveStorage()
+    pipeline = IngestionPipeline(
         parser=_FakeParser(),
         chunker=_FakeChunker(n_chunks),
         vector_store=vector_store,
         state_store=state_store,
-        file_storage=_FakeFileStorage(stored),
+        staging_storage=staging,
+        archive_storage=archive,
         settings=Settings(_env_file=None),
     )
+    return pipeline, staging, archive
 
 
 @pytest.mark.asyncio
 async def test_pipeline_indexes_new_document() -> None:
-    stored = StoredFile(path="researches/a.pdf", filename="a.pdf", content_hash="h1", research_id="r1")
     vector_store = _FakeVectorStore()
     state_store = _FakeStateStore()
-    pipeline = _pipeline(vector_store, state_store, stored)
+    pipeline, staging, archive = _pipeline(vector_store, state_store)
 
-    result = await pipeline.process("researches/a.pdf")
+    result = await pipeline.process("a.pdf")
 
     assert result.status == IngestStatus.INDEXED
     assert result.chunk_count == 3
     assert result.skipped is False
     assert len(vector_store.upserts) == 1
+    assert archive.saved == [("a.pdf", b"%PDF-1.4")]
+    assert staging.deleted == ["a.pdf"]
     assert state_store.records["a.pdf"].status == IngestStatus.INDEXED
 
 
 @pytest.mark.asyncio
 async def test_pipeline_stores_display_name() -> None:
-    stored = StoredFile(path="researches/a.pdf", filename="a.pdf", content_hash="h1", research_id="r1")
     vector_store = _FakeVectorStore()
     state_store = _FakeStateStore()
-    pipeline = _pipeline(vector_store, state_store, stored)
+    pipeline, _, _ = _pipeline(vector_store, state_store)
 
-    result = await pipeline.process("researches/a.pdf", display_name="My Custom Title")
+    result = await pipeline.process("a.pdf", display_name="My Custom Title")
 
     assert result.status == IngestStatus.INDEXED
     assert state_store.records["a.pdf"].display_name == "My Custom Title"
@@ -175,28 +256,29 @@ async def test_pipeline_stores_display_name() -> None:
 
 @pytest.mark.asyncio
 async def test_pipeline_skips_unchanged_indexed_document() -> None:
-    stored = StoredFile(path="researches/a.pdf", filename="a.pdf", content_hash="h1", research_id="r1")
+    content = b"%PDF-1.4"
     vector_store = _FakeVectorStore()
     state_store = _FakeStateStore()
     state_store.records["a.pdf"] = DocumentRecord(
         filename="a.pdf",
-        content_hash="h1",
+        content_hash=compute_content_hash(content),
         research_id="r1",
         status=IngestStatus.INDEXED,
         chunk_count=3,
     )
-    pipeline = _pipeline(vector_store, state_store, stored)
+    pipeline, staging, archive = _pipeline(vector_store, state_store, content=content)
 
-    result = await pipeline.process("researches/a.pdf")
+    result = await pipeline.process("a.pdf")
 
     assert result.skipped is True
     assert result.chunk_count == 3
-    assert vector_store.upserts == []  # no re-index
+    assert vector_store.upserts == []
+    assert archive.saved == []
+    assert staging.deleted == ["a.pdf"]
 
 
 @pytest.mark.asyncio
 async def test_pipeline_reindexes_changed_document() -> None:
-    stored = StoredFile(path="researches/a.pdf", filename="a.pdf", content_hash="h2", research_id="r2")
     vector_store = _FakeVectorStore()
     state_store = _FakeStateStore()
     state_store.records["a.pdf"] = DocumentRecord(
@@ -206,21 +288,17 @@ async def test_pipeline_reindexes_changed_document() -> None:
         status=IngestStatus.INDEXED,
         chunk_count=3,
     )
-    pipeline = _pipeline(vector_store, state_store, stored)
+    pipeline, _, _ = _pipeline(vector_store, state_store, content=b"%PDF-changed")
 
-    result = await pipeline.process("researches/a.pdf")
+    result = await pipeline.process("a.pdf")
 
     assert result.status == IngestStatus.INDEXED
-    assert result.research_id == "r2"
-    # Old chunks (r1) and current (r2) both cleared before re-index.
     assert "r1" in vector_store.deleted
-    assert "r2" in vector_store.deleted
     assert len(vector_store.upserts) == 1
 
 
 @pytest.mark.asyncio
 async def test_pipeline_marks_failed_on_error() -> None:
-    stored = StoredFile(path="researches/a.pdf", filename="a.pdf", content_hash="h1", research_id="r1")
     state_store = _FakeStateStore()
 
     class _BoomVectorStore(_FakeVectorStore):
@@ -228,13 +306,46 @@ async def test_pipeline_marks_failed_on_error() -> None:
             raise RuntimeError("boom")
 
     vector_store = _BoomVectorStore()
-    pipeline = _pipeline(vector_store, state_store, stored)
+    pipeline, staging, archive = _pipeline(vector_store, state_store)
 
     with pytest.raises(RuntimeError):
-        await pipeline.process("researches/a.pdf")
+        await pipeline.process("a.pdf")
 
     assert state_store.records["a.pdf"].status == IngestStatus.FAILED
     assert state_store.records["a.pdf"].error == "boom"
+    assert archive.saved == []
+    assert staging.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_pipeline_archive_failure_keeps_indexed() -> None:
+    vector_store = _FakeVectorStore()
+    state_store = _FakeStateStore()
+    pipeline, staging, archive = _pipeline(vector_store, state_store)
+    archive.should_fail = True
+
+    result = await pipeline.process("a.pdf")
+
+    assert result.status == IngestStatus.INDEXED
+    assert result.archive_error == "archive failed"
+    assert state_store.records["a.pdf"].status == IngestStatus.INDEXED
+    assert state_store.records["a.pdf"].archive_error == "archive failed"
+    assert staging.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_pipeline_archive_runs_after_upsert() -> None:
+    vector_store = _FakeVectorStore()
+    state_store = _FakeStateStore()
+    pipeline, _, archive = _pipeline(vector_store, state_store)
+
+    class _TrackingArchive(_FakeArchiveStorage):
+        def save(self, filename: str, content: bytes) -> StoredFile:
+            assert vector_store.upserts, "archive must run after upsert"
+            return super().save(filename, content)
+
+    pipeline._archive_storage = _TrackingArchive()
+    await pipeline.process("a.pdf")
 
 
 # --- QdrantIngestionStateStore --------------------------------------------

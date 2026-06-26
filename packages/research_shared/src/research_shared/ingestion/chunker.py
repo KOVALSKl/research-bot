@@ -1,8 +1,25 @@
+from __future__ import annotations
+
+import re
+
 from research_shared.config.settings import Settings
 from research_shared.domain.models import ResearchChunk
 from research_shared.ingestion.protocols import ParsedDocument
 
-_SEPARATORS = ["\n\n", "\n", ". ", " ", ""]
+# Prefer paragraph and sentence boundaries before falling back to words/characters.
+_SEPARATORS = ["\n\n", "\n", ". ", "! ", "? ", "; ", ": ", ", ", " ", ""]
+
+_HYPHENATED_LINE_BREAK = re.compile(r"(\w)-\n(\w)")
+_SINGLE_NEWLINE = re.compile(r"(?<=[^\n])\n(?=[^\n])")
+_MULTI_BLANK_LINES = re.compile(r"\n{3,}")
+_WHITESPACE = re.compile(r"[ \t]+")
+
+# LLM control tokens that may appear in PDFs (e.g. from AI-generated content)
+# and could be used for prompt injection via document context.
+_LLM_CONTROL_TOKENS = re.compile(
+    r"<\|system\|>|<\|user\|>|<\|assistant\|>|\[/?INST\]|\[/?SYS\]",
+    re.IGNORECASE,
+)
 
 
 class RecursiveChunker:
@@ -11,25 +28,29 @@ class RecursiveChunker:
     Each page is chunked independently so that the ``page`` metadata stays
     accurate for citation. ``chunk_index`` is assigned sequentially across the
     whole document.
+
+    Text is normalized for typical PDF extraction artefacts (hyphenation,
+    hard line breaks) before splitting — important for Cyrillic documents.
     """
 
     def __init__(self, settings: Settings | None = None) -> None:
         settings = settings or Settings()
         self._chunk_size = settings.chunk_size
         self._chunk_overlap = settings.chunk_overlap
+        self._chunk_min_chars = settings.chunk_min_chars
 
     def chunk(self, document: ParsedDocument, research_id: str) -> list[ResearchChunk]:
         chunks: list[ResearchChunk] = []
         chunk_index = 0
 
         for page in document.pages:
-            text = (page.text or "").strip()
+            text = self._normalize_text(page.text or "")
             if not text:
                 continue
 
             for piece in self._split_text(text):
                 piece = piece.strip()
-                if not piece:
+                if len(piece) < self._chunk_min_chars:
                     continue
                 chunks.append(
                     ResearchChunk(
@@ -49,6 +70,15 @@ class RecursiveChunker:
                 chunk_index += 1
 
         return chunks
+
+    def _normalize_text(self, text: str) -> str:
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        text = _HYPHENATED_LINE_BREAK.sub(r"\1\2", text)
+        text = _SINGLE_NEWLINE.sub(" ", text)
+        text = _MULTI_BLANK_LINES.sub("\n\n", text)
+        text = _WHITESPACE.sub(" ", text)
+        text = _LLM_CONTROL_TOKENS.sub("", text)
+        return text.strip()
 
     def _split_text(self, text: str) -> list[str]:
         atoms = self._recursive_split(text, _SEPARATORS)

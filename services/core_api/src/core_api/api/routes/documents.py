@@ -1,9 +1,9 @@
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 
-from research_shared.domain.models import DocumentListItem, IngestStatus, ResearchChunk
+from research_shared.domain.models import DocumentListItem, DocumentRecord, IngestStatus, ResearchChunk
 from research_shared.logging_config import get_logger
 
 from core_api.dependencies import get_app_state
@@ -22,23 +22,32 @@ def _validate_pdf(file: UploadFile) -> None:
         )
 
 
-async def _resolve_pdf_path(state, research_id: str) -> Path | None:
-    if state.ingestion_pipeline is not None:
-        records = await state.ingestion_pipeline._state_store.list()
-        for record in records:
-            if record.research_id == research_id:
-                path = state.file_storage.directory / record.filename
-                if path.is_file():
-                    return path
-
-    for path in state.file_storage.list():
-        described = state.file_storage.describe(path)
-        if described.research_id == research_id:
-            return path
+async def _get_record_by_research_id(state, research_id: str) -> DocumentRecord | None:
+    if state.ingestion_pipeline is None:
+        return None
+    records = await state.ingestion_pipeline._state_store.list()
+    for record in records:
+        if record.research_id == research_id:
+            return record
     return None
 
 
-def _record_to_list_item(record) -> DocumentListItem:
+async def _resolve_pdf_filename(state, research_id: str) -> str | None:
+    record = await _get_record_by_research_id(state, research_id)
+    if record is not None:
+        return record.filename
+
+    for info in state.archive_storage.list_pdfs():
+        try:
+            described = state.archive_storage.describe(info.filename)
+        except FileNotFoundError:
+            continue
+        if described.research_id == research_id:
+            return info.filename
+    return None
+
+
+def _record_to_list_item(record: DocumentRecord) -> DocumentListItem:
     return DocumentListItem(
         research_id=record.research_id,
         filename=record.filename,
@@ -46,10 +55,11 @@ def _record_to_list_item(record) -> DocumentListItem:
         status=record.status,
         chunk_count=record.chunk_count,
         indexed_at=record.indexed_at,
+        source_url=record.source_url,
     )
 
 
-def _sort_documents(records: list) -> list:
+def _sort_documents(records: list[DocumentRecord]) -> list[DocumentRecord]:
     return sorted(
         records,
         key=lambda record: (
@@ -89,26 +99,55 @@ async def list_documents(
 async def download_source_file(
     research_id: str,
     state = Depends(get_app_state),
-) -> FileResponse:
-    path = await _resolve_pdf_path(state, research_id)
-    if path is None:
+):
+    record = await _get_record_by_research_id(state, research_id)
+    if record is not None and record.source_url:
+        logger.info(
+            "Source file redirect",
+            extra={
+                "research_id": research_id,
+                "event": "document.file_redirect",
+            },
+        )
+        return RedirectResponse(url=record.source_url, status_code=status.HTTP_302_FOUND)
+
+    filename = await _resolve_pdf_filename(state, research_id)
+    if filename is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Source file not found for research_id={research_id}",
         )
 
+    try:
+        content = state.archive_storage.read(filename)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Source file not found for research_id={research_id}",
+        ) from None
+    except Exception as exc:
+        logger.error(
+            "Document storage read failed",
+            extra={"research_id": research_id, "event": "document.storage.error"},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document storage temporarily unavailable",
+        ) from exc
+
     logger.info(
         "Source file download",
         extra={
             "research_id": research_id,
-            "attachment_name": path.name,
+            "attachment_name": filename,
             "event": "document.file_download",
         },
     )
-    return FileResponse(
-        path,
+    return StreamingResponse(
+        iter([content]),
         media_type="application/pdf",
-        filename=path.name,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -122,7 +161,18 @@ async def upload_document(
     _validate_pdf(file)
     content = await file.read()
     upload_name = file.filename or "document.pdf"
-    stored = state.file_storage.save(upload_name, content)
+    try:
+        stored = state.staging_storage.save(upload_name, content)
+    except Exception as exc:
+        logger.error(
+            "Staging storage save failed",
+            extra={"attachment_name": upload_name, "event": "document.staging.error"},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document storage temporarily unavailable",
+        ) from exc
     resolved_display_name = (display_name or "").strip() or stored.filename
     logger.info(
         "Document upload received",
@@ -135,9 +185,14 @@ async def upload_document(
 
     if state.settings.ingest_sync:
         result = await state.ingestion_pipeline.process(
-            stored.path,
+            stored.filename,
             display_name=resolved_display_name,
         )
+        if result.archive_error:
+            state.celery_client.enqueue_archive_document(
+                stored.filename,
+                display_name=resolved_display_name,
+            )
         response.status_code = status.HTTP_201_CREATED
         return {
             "filename": stored.filename,
@@ -149,7 +204,7 @@ async def upload_document(
         }
 
     task_id = state.celery_client.enqueue_index_document(
-        str(stored.path),
+        stored.filename,
         display_name=resolved_display_name,
     )
     response.status_code = status.HTTP_202_ACCEPTED
@@ -180,7 +235,7 @@ async def upload_documents_batch(
         try:
             _validate_pdf(file)
             content = await file.read()
-            stored = state.file_storage.save(file.filename, content)
+            stored = state.staging_storage.save(file.filename or "document.pdf", content)
             resolved_display_name = stored.filename
             if display_names and index < len(display_names):
                 name = (display_names[index] or "").strip()
@@ -189,9 +244,14 @@ async def upload_documents_batch(
 
             if state.settings.ingest_sync:
                 result = await state.ingestion_pipeline.process(
-                    stored.path,
+                    stored.filename,
                     display_name=resolved_display_name,
                 )
+                if result.archive_error:
+                    state.celery_client.enqueue_archive_document(
+                        stored.filename,
+                        display_name=resolved_display_name,
+                    )
                 jobs.append(
                     {
                         "filename": stored.filename,
@@ -203,7 +263,7 @@ async def upload_documents_batch(
                 )
             else:
                 task_id = state.celery_client.enqueue_index_document(
-                    str(stored.path),
+                    stored.filename,
                     display_name=resolved_display_name,
                 )
                 jobs.append(

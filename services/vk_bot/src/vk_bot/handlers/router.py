@@ -13,6 +13,7 @@ class Intent(Enum):
   GREETING = "greeting"
   HELP = "help"
   ASK = "ask"
+  IDEA = "idea"
   LIST = "list"
   UPLOAD = "upload"
   UNKNOWN = "unknown"
@@ -22,6 +23,7 @@ class Intent(Enum):
 class RouteResult:
   intent: Intent
   ask_text: str = ""
+  idea_text: str = ""
 
 
 class CommandRouter:
@@ -36,6 +38,11 @@ class CommandRouter:
     )
     self._ask_prefixes = sorted(
       settings.vk_ask_command_prefixes,
+      key=len,
+      reverse=True,
+    )
+    self._idea_prefixes = sorted(
+      settings.vk_idea_command_prefixes,
       key=len,
       reverse=True,
     )
@@ -66,6 +73,17 @@ class CommandRouter:
       prefix_lower = prefix.lower()
       if normalized == prefix_lower or normalized.startswith(f"{prefix_lower} "):
         return RouteResult(Intent.LIST)
+
+    for prefix in self._idea_prefixes:
+      prefix_lower = prefix.lower()
+      if normalized == prefix_lower:
+        return RouteResult(Intent.HELP)
+      if normalized.startswith(prefix_lower):
+        idea_text = text[len(prefix) :].strip()
+        if idea_text.startswith(":"):
+          idea_text = idea_text[1:].strip()
+        if idea_text:
+          return RouteResult(Intent.IDEA, idea_text=idea_text)
 
     for prefix in self._ask_prefixes:
       prefix_lower = prefix.lower()

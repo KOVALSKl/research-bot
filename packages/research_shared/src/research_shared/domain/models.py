@@ -66,6 +66,9 @@ class DocumentRecord(BaseModel):
     indexed_at: datetime | None = None
     updated_at: datetime | None = None
     error: str | None = None
+    source_url: str | None = None
+    archive_path: str | None = None
+    archive_error: str | None = None
 
 
 class DocumentListItem(BaseModel):
@@ -75,6 +78,7 @@ class DocumentListItem(BaseModel):
     status: IngestStatus
     chunk_count: int = 0
     indexed_at: datetime | None = None
+    source_url: str | None = None
 
 
 class Citation(BaseModel):
@@ -87,6 +91,7 @@ class Citation(BaseModel):
     display_name: str | None = None
     chapter: str | None = None
     authors: list[str] = Field(default_factory=list)
+    source_url: str | None = None
 
 
 class SourceFileRef(BaseModel):
@@ -94,6 +99,16 @@ class SourceFileRef(BaseModel):
     filename: str
     display_name: str | None = None
     path: str | None = None
+    source_url: str | None = None
+
+
+class ExternalSourceFileRef(BaseModel):
+    external_index: int
+    title: str
+    cache_key: str
+    filename: str
+    pdf_url: str | None = None
+    display_name: str | None = None
 
 
 class AskQuery(BaseModel):

@@ -15,12 +15,20 @@ COPY services/worker services/worker
 
 RUN uv sync --package worker --no-dev
 
+ENV FASTEMBED_CACHE_PATH=/app/.cache/fastembed
+RUN mkdir -p "${FASTEMBED_CACHE_PATH}" && /app/.venv/bin/python -c "\
+from fastembed import SparseTextEmbedding, TextEmbedding; \
+TextEmbedding(model_name='intfloat/multilingual-e5-large'); \
+SparseTextEmbedding(model_name='Qdrant/bm25')"
+
 FROM python:3.12-slim
 
 WORKDIR /app
 
 COPY --from=builder /app /app
+COPY --from=builder /app/.cache/fastembed /app/.cache/fastembed
 
 ENV PATH="/app/.venv/bin:$PATH"
+ENV FASTEMBED_CACHE_PATH=/app/.cache/fastembed
 
 CMD ["celery", "-A", "worker.celery_app", "worker", "--loglevel=info"]

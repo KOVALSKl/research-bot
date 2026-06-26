@@ -1,19 +1,12 @@
-import hashlib
-from dataclasses import dataclass
 from pathlib import Path
 
 from research_shared.config.settings import Settings
-
-
-@dataclass
-class StoredFile:
-    path: Path
-    filename: str
-    content_hash: str
-    research_id: str
+from research_shared.ingestion.storage_protocol import PdfFileInfo, StoredFile
 
 
 def compute_content_hash(content: bytes) -> str:
+    import hashlib
+
     return hashlib.sha256(content).hexdigest()
 
 
@@ -22,8 +15,8 @@ def compute_research_id(content: bytes) -> str:
     return compute_content_hash(content)[:16]
 
 
-class FileStorage:
-    """Stores raw documents in the ``researches/`` directory (source of truth)."""
+class LocalDocumentStorage:
+    """Stores raw documents in the ``researches/`` directory (dev/local fallback)."""
 
     def __init__(self, settings: Settings | None = None) -> None:
         settings = settings or Settings()
@@ -45,14 +38,34 @@ class FileStorage:
             research_id=compute_research_id(content),
         )
 
-    def list(self) -> list[Path]:
+    def list_pdfs(self) -> list[PdfFileInfo]:
         if not self._dir.exists():
             return []
-        return sorted(p for p in self._dir.glob("*.pdf") if p.is_file())
+        items: list[PdfFileInfo] = []
+        for path in sorted(p for p in self._dir.glob("*.pdf") if p.is_file()):
+            stat = path.stat()
+            content = path.read_bytes()
+            items.append(
+                PdfFileInfo(
+                    filename=path.name,
+                    size=stat.st_size,
+                    modified=None,
+                    content_hash=compute_content_hash(content),
+                )
+            )
+        return items
 
-    def describe(self, path: str | Path) -> StoredFile:
+    def read(self, filename: str) -> bytes:
+        path = self._dir / Path(filename).name
+        if not path.is_file():
+            raise FileNotFoundError(filename)
+        return path.read_bytes()
+
+    def describe(self, filename: str | Path) -> StoredFile:
         """Compute deterministic hashes/research_id for an existing file."""
-        path = Path(path)
+        path = Path(filename)
+        if not path.is_file():
+            path = self._dir / path.name
         content = path.read_bytes()
         return StoredFile(
             path=path,
@@ -60,3 +73,18 @@ class FileStorage:
             content_hash=compute_content_hash(content),
             research_id=compute_research_id(content),
         )
+
+    def delete(self, filename: str) -> None:
+        path = self._dir / Path(filename).name
+        if path.is_file():
+            path.unlink()
+
+    def list(self) -> list[Path]:
+        """Legacy helper — returns local PDF paths."""
+        if not self._dir.exists():
+            return []
+        return sorted(p for p in self._dir.glob("*.pdf") if p.is_file())
+
+
+# Backward-compatible alias
+FileStorage = LocalDocumentStorage

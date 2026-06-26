@@ -6,11 +6,18 @@ from research_shared.storage.embeddings.ollama import OllamaDenseEmbedder
 
 
 def test_settings_ollama_defaults() -> None:
-    settings = Settings(_env_file=None)
+    settings = Settings(_env_file=None, dense_embedding_provider="ollama")
     assert settings.dense_embedding_provider == "ollama"
     assert settings.ollama_embedding_model == "qwen3-embedding:0.6b"
     assert settings.ollama_url == "http://localhost:11434"
     assert settings.dense_vector_size == 1024
+
+
+def test_settings_fastembed_defaults() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.dense_embedding_provider == "fastembed"
+    assert settings.dense_embedding_model == "intfloat/multilingual-e5-large"
+    assert settings.sparse_embedding_model == "Qdrant/bm25"
 
 
 def test_create_dense_embedder_ollama() -> None:
@@ -23,7 +30,9 @@ def test_create_dense_embedder_fastembed() -> None:
     from research_shared.storage.embeddings.fastembed import FastEmbedDenseEmbedder
 
     settings = Settings(_env_file=None, dense_embedding_provider="fastembed")
-    embedder = create_dense_embedder(settings)
+    with patch("research_shared.storage.embeddings.fastembed.TextEmbedding") as mock_cls:
+        mock_cls.return_value = MagicMock()
+        embedder = create_dense_embedder(settings)
     assert isinstance(embedder, FastEmbedDenseEmbedder)
 
 

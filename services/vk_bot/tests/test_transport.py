@@ -7,7 +7,7 @@ from vk_api.longpoll import VkEventType
 from vk_bot.config import VkBotSettings
 from vk_bot.domain import IncomingMessage
 from vk_bot.transport.callback_api import VkCallbackTransport, _callback_to_message
-from vk_bot.transport.long_polling import _event_to_message
+from vk_bot.transport.long_polling import _event_to_message, _parse_longpoll_updates
 
 
 class FakeEvent:
@@ -212,3 +212,24 @@ async def test_callback_outgoing_does_not_dispatch_handler():
   assert response.status_code == 200
   await asyncio.sleep(0.1)
   assert received == []
+
+
+def test_parse_longpoll_updates_skips_malformed_events():
+  class BrokenLongPoll:
+    def _parse_event(self, raw_event):
+      if raw_event == "bad":
+        raise AttributeError("'Event' object has no attribute 'text'")
+      return FakeEvent(
+        type=VkEventType.MESSAGE_NEW,
+        user_id=1,
+        peer_id=1,
+        from_id=2,
+        out=0,
+        text=str(raw_event),
+      )
+
+  longpoll = BrokenLongPoll()
+  events = _parse_longpoll_updates(longpoll, ["ok", "bad", "after"])
+  assert len(events) == 2
+  assert events[0].text == "ok"
+  assert events[1].text == "after"

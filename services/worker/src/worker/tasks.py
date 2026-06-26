@@ -2,7 +2,7 @@ import asyncio
 
 from research_shared.config.settings import get_settings
 from research_shared.ingestion.chunker import RecursiveChunker
-from research_shared.ingestion.file_storage import FileStorage
+from research_shared.ingestion.factory import create_archive_storage, create_staging_storage
 from research_shared.ingestion.pdf_parser import PyMuPDFParser
 from research_shared.ingestion.pipeline import IngestionPipeline
 from research_shared.ingestion.state_store import QdrantIngestionStateStore
@@ -14,49 +14,92 @@ from research_shared.storage.qdrant.store import QdrantVectorStore
 from worker.celery_app import app
 
 
-async def _process(path: str, display_name: str | None = None) -> dict:
+def _build_pipeline() -> tuple[IngestionPipeline, object]:
     settings = get_settings()
     client = create_qdrant_client(settings)
-    try:
-        # dense_vector_size from settings avoids probing Ollama on every task.
-        await ensure_collection(client, settings, vector_size=settings.dense_vector_size)
-
-        dense_embedder = create_dense_embedder(settings)
-        sparse_encoder = create_sparse_encoder(settings)
-        pipeline = IngestionPipeline(
+    return (
+        IngestionPipeline(
             parser=PyMuPDFParser(),
             chunker=RecursiveChunker(settings),
-            vector_store=QdrantVectorStore(client, dense_embedder, sparse_encoder, settings),
+            vector_store=QdrantVectorStore(
+                client,
+                create_dense_embedder(settings),
+                create_sparse_encoder(settings),
+                settings,
+            ),
             state_store=QdrantIngestionStateStore(client, settings),
-            file_storage=FileStorage(settings),
+            staging_storage=create_staging_storage(settings),
+            archive_storage=create_archive_storage(settings),
             settings=settings,
-        )
-        result = await pipeline.process(path, display_name=display_name)
-        return {
+        ),
+        client,
+    )
+
+
+async def _process(filename: str, display_name: str | None = None) -> dict:
+    settings = get_settings()
+    pipeline, client = _build_pipeline()
+    try:
+        await ensure_collection(client, settings, vector_size=settings.dense_vector_size)
+        result = await pipeline.process(filename, display_name=display_name)
+        payload = {
             "filename": result.filename,
             "research_id": result.research_id,
             "status": result.status,
             "chunk_count": result.chunk_count,
             "skipped": result.skipped,
         }
+        if result.archive_error:
+            archive_document.delay(filename, display_name=display_name)
+            payload["archive_error"] = result.archive_error
+            payload["archive_retry_enqueued"] = True
+        return payload
+    finally:
+        await client.close()
+
+
+async def _archive(filename: str, display_name: str | None = None) -> dict:
+    settings = get_settings()
+    pipeline, client = _build_pipeline()
+    try:
+        await ensure_collection(client, settings, vector_size=settings.dense_vector_size)
+        result = await pipeline.archive_only(filename, display_name=display_name)
+        payload = {
+            "filename": result.filename,
+            "research_id": result.research_id,
+            "status": result.status,
+            "chunk_count": result.chunk_count,
+        }
+        if result.archive_error:
+            payload["archive_error"] = result.archive_error
+        return payload
     finally:
         await client.close()
 
 
 @app.task(name="worker.tasks.index_document")
-def index_document(path: str, display_name: str | None = None) -> dict:
+def index_document(filename: str, display_name: str | None = None) -> dict:
     """Process and index a single document. Runs the async pipeline in the
     worker's sync context (heavy embeddings off the API event loop)."""
-    return asyncio.run(_process(path, display_name=display_name))
+    return asyncio.run(_process(filename, display_name=display_name))
+
+
+@app.task(name="worker.tasks.archive_document", bind=True, max_retries=3, default_retry_delay=60)
+def archive_document(self, filename: str, display_name: str | None = None) -> dict:
+    """Retry archive for an indexed document whose staging file is still available."""
+    try:
+        return asyncio.run(_archive(filename, display_name=display_name))
+    except Exception as exc:  # noqa: BLE001 — Celery retry for transient archive errors
+        raise self.retry(exc=exc) from exc
 
 
 @app.task(name="worker.tasks.index_batch")
 def index_batch(
-    paths: list[str],
+    filenames: list[str],
     display_names: list[str] | None = None,
 ) -> list[dict]:
-    names = display_names or [None] * len(paths)
+    names = display_names or [None] * len(filenames)
     return [
-        asyncio.run(_process(path, display_name=name))
-        for path, name in zip(paths, names, strict=False)
+        asyncio.run(_process(filename, display_name=name))
+        for filename, name in zip(filenames, names, strict=False)
     ]

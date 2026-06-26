@@ -1,0 +1,33 @@
+stages:
+  - test
+
+variables:
+  UV_CACHE_DIR: "$CI_PROJECT_DIR/.uv-cache"
+
+.agent-tests:
+  image: python:3.12-slim
+  before_script:
+    - pip install uv
+    - uv sync
+  cache:
+    key: uv-$CI_COMMIT_REF_SLUG
+    paths:
+      - .uv-cache
+
+test:vk-api-download:
+  extends: .agent-tests
+  stage: test
+  script:
+    - uv run pytest services/vk_bot/tests/test_vk_api_download.py -q
+
+test:research-agent-v8:
+  extends: .agent-tests
+  stage: test
+  script:
+    - uv run pytest packages/research_shared/tests/test_agent_diagnostics.py packages/research_shared/tests/test_research_agent.py packages/research_shared/tests/test_react_loop.py -q
+
+test:vk-bot:
+  extends: .agent-tests
+  stage: test
+  script:
+    - uv run pytest services/vk_bot/tests/test_bot_service.py services/vk_bot/tests/test_vk_api_download.py -q

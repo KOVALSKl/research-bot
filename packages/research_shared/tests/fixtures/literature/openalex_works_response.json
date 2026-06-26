@@ -1,0 +1,59 @@
+{
+  "meta": {
+    "count": 2,
+    "per_page": 10
+  },
+  "results": [
+    {
+      "id": "https://openalex.org/W123456789",
+      "display_name": "Graph Neural Networks for Financial Distress",
+      "publication_year": 2023,
+      "doi": "https://doi.org/10.1234/gnn.fin.2023",
+      "abstract_inverted_index": {
+        "We": [0],
+        "study": [1],
+        "bankruptcy": [2],
+        "prediction": [3]
+      },
+      "authorships": [
+        {
+          "author": {
+            "display_name": "Alice Smith"
+          }
+        },
+        {
+          "author": {
+            "display_name": "Bob Jones"
+          }
+        }
+      ],
+      "primary_location": {
+        "landing_page_url": "https://example.org/papers/gnn-financial",
+        "pdf_url": "https://example.org/papers/gnn-financial.pdf"
+      },
+      "best_oa_location": {
+        "pdf_url": "https://example.org/papers/gnn-financial.pdf"
+      },
+      "open_access": {
+        "is_oa": true,
+        "oa_url": "https://example.org/papers/gnn-financial.pdf"
+      }
+    },
+    {
+      "id": "https://openalex.org/W987654321",
+      "display_name": "Sparse Abstract Example",
+      "publication_year": 2021,
+      "doi": null,
+      "authorships": [
+        {
+          "author": {
+            "display_name": "Carol Lee"
+          }
+        }
+      ],
+      "primary_location": {
+        "landing_page_url": "https://example.org/papers/sparse"
+      }
+    }
+  ]
+}
